@@ -1,0 +1,17 @@
+{
+  "name": "workflow-orchestration-engine",
+  "version": "1.0.0",
+  "description": "A lightweight DAG-based workflow orchestration engine for enterprise operations.",
+  "main": "api/server.js",
+  "scripts": {
+    "start": "node api/server.js",
+    "dev": "node --watch api/server.js",
+    "cli": "node cli.js"
+  },
+  "dependencies": {
+    "express": "^4.19.2"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Workflow Orchestration Engine</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: #0f172a;
+    color: #e2e8f0;
+    margin: 0;
+    padding: 32px;
+  }
+  h1 { font-size: 1.5rem; margin-bottom: 4px; }
+  p.subtitle { color: #94a3b8; margin-top: 0; margin-bottom: 24px; }
+  .layout { display: grid; grid-template-columns: 340px 1fr; gap: 20px; align-items: start; }
+  .card {
+    background: #1e293b;
+    border: 1px solid #334155;
+    border-radius: 12px;
+    padding: 18px;
+    margin-bottom: 16px;
+  }
+  .workflow-item {
+    padding: 12px;
+    border-radius: 8px;
+    background: #0f172a;
+    border: 1px solid #334155;
+    margin-bottom: 10px;
+    cursor: pointer;
+  }
+  .workflow-item:hover { border-color: #6366f1; }
+  .workflow-item.active { border-color: #6366f1; background: #1e1b4b; }
+  .workflow-item h3 { margin: 0 0 4px 0; font-size: 1rem; }
+  .workflow-item p { margin: 0; font-size: 0.8rem; color: #94a3b8; }
+  button {
+    background: #6366f1;
+    color: white;
+    border: none;
+    border-radius: 8px;
+    padding: 10px 16px;
+    font-size: 0.9rem;
+    cursor: pointer;
+  }
+  button:hover { background: #4f46e5; }
+  .level {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 10px;
+    flex-wrap: wrap;
+  }
+  .task-node {
+    flex: 1 1 140px;
+    min-width: 140px;
+    padding: 12px;
+    border-radius: 8px;
+    background: #0f172a;
+    border: 2px solid #334155;
+    text-align: center;
+  }
+  .task-node .id { font-weight: 600; font-size: 0.85rem; }
+  .task-node .status { font-size: 0.75rem; margin-top: 6px; color: #94a3b8; }
+  .task-node.PENDING { border-color: #334155; }
+  .task-node.RUNNING { border-color: #f59e0b; animation: pulse 1s infinite; }
+  .task-node.SUCCESS { border-color: #22c55e; }
+  .task-node.FAILED { border-color: #ef4444; }
+  .task-node.SKIPPED { border-color: #64748b; opacity: 0.6; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.6; } }
+  .run-meta { font-size: 0.85rem; color: #94a3b8; margin-bottom: 14px; }
+  .log {
+    font-family: "SF Mono", Menlo, monospace;
+    font-size: 0.78rem;
+    background: #0f172a;
+    border-radius: 8px;
+    padding: 12px;
+    max-height: 220px;
+    overflow-y: auto;
+    border: 1px solid #334155;
+  }
+  .log div { margin-bottom: 4px; }
+  .badge {
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 0.7rem;
+    font-weight: 600;
+  }
+  .badge.SUCCESS { background: #14532d; color: #86efac; }
+  .badge.FAILED { background: #7f1d1d; color: #fca5a5; }
+  .badge.RUNNING { background: #78350f; color: #fcd34d; }
+  .badge.PENDING { background: #334155; color: #cbd5e1; }
+</style>
+</head>
+<body>
+  <h1>Workflow Orchestration Engine</h1>
+  <p class="subtitle">Enterprise-ops task orchestration — DAG execution, retries, and live run monitoring.</p>
+
+  <div class="layout">
+    <div>
+      <div class="card">
+        <h3 style="margin-top:0;">Workflows</h3>
+        <div id="workflow-list"></div>
+      </div>
+      <div class="card">
+        <h3 style="margin-top:0;">Recent Runs</h3>
+        <div id="run-list" class="log"><div>No runs yet.</div></div>
+      </div>
+    </div>
+
+    <div>
+      <div class="card" id="detail-card">
+        <p>Select a workflow to view its DAG and trigger a run.</p>
+      </div>
+      <div class="card" id="run-card" style="display:none;">
+        <div class="run-meta" id="run-meta"></div>
+        <div id="dag-view"></div>
+        <h4>Live Log</h4>
+        <div class="log" id="event-log"></div>
+      </div>
+    </div>
+  </div>
+
+<script>
+let workflows = [];
+let activeWorkflowId = null;
+let activeRunId = null;
+
+async function fetchWorkflows() {
+  const res = await fetch('/api/workflows');
+  workflows = await res.json();
+  renderWorkflowList();
+}
+
+function renderWorkflowList() {
+  const container = document.getElementById('workflow-list');
+  container.innerHTML = '';
+  workflows.forEach((wf) => {
+    const div = document.createElement('div');
+    div.className = 'workflow-item' + (wf.id === activeWorkflowId ? ' active' : '');
+    div.innerHTML = `<h3>${wf.id}</h3><p>${wf.description}</p>`;
+    div.onclick = () => selectWorkflow(wf.id);
+    container.appendChild(div);
+  });
+}
+
+function selectWorkflow(id) {
+  activeWorkflowId = id;
+  renderWorkflowList();
+  const wf = workflows.find((w) => w.id === id);
+  const card = document.getElementById('detail-card');
+  card.innerHTML = `
+    <h3 style="margin-top:0;">${wf.id}</h3>
+    <p style="color:#94a3b8;">${wf.description}</p>
+    <div id="static-dag"></div>
+    <button id="trigger-btn">Trigger Run</button>
+  `;
+  renderDag('static-dag', wf.executionLevels, {});
+  document.getElementById('trigger-btn').onclick = () => triggerRun(id);
+}
+
+function renderDag(containerId, levels, taskStates) {
+  const container = document.getElementById(containerId);
+  container.innerHTML = '';
+  levels.forEach((level) => {
+    const row = document.createElement('div');
+    row.className = 'level';
+    level.forEach((taskId) => {
+      const status = (taskStates[taskId] && taskStates[taskId].status) || 'PENDING';
+      const node = document.createElement('div');
+      node.className = `task-node ${status}`;
+      node.id = `task-node-${taskId}`;
+      node.innerHTML = `<div class="id">${taskId}</div><div class="status">${status}</div>`;
+      row.appendChild(node);
+    });
+    container.appendChild(row);
+  });
+}
+
+async function triggerRun(workflowId) {
+  const res = await fetch(`/api/workflows/${workflowId}/trigger`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ employeeName: 'Jordan Rivera' }),
+  });
+  const run = await res.json();
+  activeRunId = run.id;
+  document.getElementById('run-card').style.display = 'block';
+  document.getElementById('event-log').innerHTML = '';
+  const wf = workflows.find((w) => w.id === workflowId);
+  renderDag('dag-view', wf.executionLevels, run.tasks);
+  updateRunMeta(run);
+}
+
+function updateRunMeta(run) {
+  document.getElementById('run-meta').innerHTML =
+    `Run <code>${run.id}</code> &middot; <span class="badge ${run.status}">${run.status}</span>`;
+}
+
+function logEvent(text) {
+  const log = document.getElementById('event-log');
+  const line = document.createElement('div');
+  line.textContent = `[${new Date().toLocaleTimeString()}] ${text}`;
+  log.prepend(line);
+}
+
+function setNodeStatus(taskId, status) {
+  const node = document.getElementById(`task-node-${taskId}`);
+  if (!node) return;
+  node.className = `task-node ${status}`;
+  node.querySelector('.status').textContent = status;
+}
+
+async function refreshRunList() {
+  const res = await fetch('/api/runs');
+  const runs = await res.json();
+  const container = document.getElementById('run-list');
+  if (runs.length === 0) {
+    container.innerHTML = '<div>No runs yet.</div>';
+    return;
+  }
+  container.innerHTML = runs
+    .slice()
+    .reverse()
+    .slice(0, 10)
+    .map(
+      (r) =>
+        `<div>${r.workflowId} &middot; <span class="badge ${r.status}">${r.status}</span> &middot; ${r.id.slice(0, 8)}</div>`
+    )
+    .join('');
+}
+
+function connectEvents() {
+  const es = new EventSource('/api/events');
+  const handlers = {
+    'run:started': (d) => logEvent(`Run ${d.runId.slice(0,8)} started (${d.workflowId})`),
+    'run:success': (d) => { logEvent(`Run ${d.runId.slice(0,8)} completed successfully`); refreshRunList(); if (d.runId === activeRunId) fetchRun(d.runId); },
+    'run:failed': (d) => { logEvent(`Run ${d.runId.slice(0,8)} failed`); refreshRunList(); if (d.runId === activeRunId) fetchRun(d.runId); },
+    'task:started': (d) => { logEvent(`Task "${d.taskId}" started`); setNodeStatus(d.taskId, 'RUNNING'); },
+    'task:success': (d) => { logEvent(`Task "${d.taskId}" succeeded`); setNodeStatus(d.taskId, 'SUCCESS'); },
+    'task:failed': (d) => { logEvent(`Task "${d.taskId}" failed: ${d.error}`); setNodeStatus(d.taskId, 'FAILED'); },
+    'task:retry': (d) => logEvent(`Task "${d.taskId}" retrying (attempt ${d.attempt}): ${d.error}`),
+    'task:skipped': (d) => { logEvent(`Task "${d.taskId}" skipped (upstream failure)`); setNodeStatus(d.taskId, 'SKIPPED'); },
+  };
+  Object.entries(handlers).forEach(([event, handler]) => {
+    es.addEventListener(event, (e) => handler(JSON.parse(e.data)));
+  });
+}
+
+async function fetchRun(runId) {
+  const res = await fetch(`/api/runs/${runId}`);
+  const run = await res.json();
+  updateRunMeta(run);
+}
+
+fetchWorkflows();
+refreshRunList();
+connectEvents();
+setInterval(refreshRunList, 5000);
+</script>
+</body>
+</html>
